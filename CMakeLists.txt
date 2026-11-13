@@ -1191,6 +1191,17 @@ if(OBN_BUILD_TESTS AND NOT WIN32)
     endif()
     add_test(NAME cert_store COMMAND cert_store_test)
 
+    # TLS handshake smoke test: a real TLS 1.3 handshake in-process catches
+    # toolchain miscompiles of OpenSSL's extension parsing
+    # (persano/open-bambu-networking-plugin#10).
+    add_executable(tls_handshake_test tests/tls_handshake_test.cpp)
+    target_include_directories(tls_handshake_test PRIVATE include ${OBN_GENERATED_DIR})
+    target_link_libraries(tls_handshake_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    if(WIN32)
+        target_link_libraries(tls_handshake_test PRIVATE ws2_32 crypt32 secur32 bcrypt iphlpapi)
+    endif()
+    add_test(NAME tls_handshake COMMAND tls_handshake_test)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         foreach(_obn_variant IN ITEMS clean interposed)
             set(_obn_tgt openssl_host_check_${_obn_variant}_test)
