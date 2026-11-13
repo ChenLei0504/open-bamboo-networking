@@ -148,7 +148,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           $arch = '${{ matrix.arch }}'
           $cmakeArch = if ($arch -eq 'arm64') { 'ARM64' } else { 'x64' }
-          $triplet = if ($arch -eq 'arm64') { 'arm64-windows-static-md' } else { 'x64-windows-static-md' }
+          # arm64 uses the overlay triplet that forces /O1: MSVC ARM64
+          # miscompiles OpenSSL at /O2 /Gs0 and crashes the Bambu cloud TLS
+          # login (issue #10 / openssl/openssl#26239).
+          $triplet = if ($arch -eq 'arm64') { 'arm64-windows-static-md-o1' } else { 'x64-windows-static-md' }
+          $cmakeArg = @()
+          if ($arch -eq 'arm64') {
+            $cmakeArg = "-DVCPKG_OVERLAY_TRIPLETS=$env:GITHUB_WORKSPACE\triplets"
+          }
           .\configure.ps1 `
             -ClientType bambu_studio `
             -WithVersion '${{ matrix.abi }}.99' `
@@ -157,7 +164,8 @@ jobs:
             -VcpkgTriplet $triplet `
             -PatchConf:$false `
             -RegisterDShowFilter:$false `
-            -EnableTests:$true
+            -EnableTests:$true `
+            -CMakeArg $cmakeArg
           # Re-run cmake to inject OBN_RELEASE into the existing build tree
           cmake build -DOBN_RELEASE=ON
 

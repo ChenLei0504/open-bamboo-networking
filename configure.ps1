@@ -50,7 +50,7 @@ param(
     # copies of the C runtime side by side with diverging stdio and heap
     # state. -static (without -md) is left as an option for users who want
     # the older default. Use arm64-windows-static-md for native Windows ARM64.
-    [ValidateSet("x64-windows","x64-windows-static","x64-windows-static-md","x86-windows","x86-windows-static","arm64-windows","arm64-windows-static-md")]
+    [ValidateSet("x64-windows","x64-windows-static","x64-windows-static-md","x86-windows","x86-windows-static","arm64-windows","arm64-windows-static-md","arm64-windows-static-md-o1")]
     [string]   $VcpkgTriplet = "x64-windows-static-md",
     # Empty = let CMake choose (-G omitted). Pass an explicit name to pin
     # a Visual Studio version (e.g. "Visual Studio 16 2019").
