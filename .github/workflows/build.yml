@@ -319,7 +319,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.target_os == 'all' || inputs.target_os == 'macos'
     # Uncomment this job to enable Intel macOS interim builds (macos-latest-large).
     needs: [discover-abi]
-    runs-on: macos-latest-large
+    # macos-15-intel = standard 4-core Intel, free unlimited for public repos;
+    # macos-latest-large is a paid larger runner (billing has failed before).
+    runs-on: macos-15-intel
     strategy:
       fail-fast: false
       matrix:
