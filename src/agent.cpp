@@ -3166,96 +3166,9 @@ void Agent::clear_session()
 // Cloud MQTT plumbing.
 // --------------------------------------------------------------------------
 
-int Agent::connect_cloud()
+BBL::OnMessageFn Agent::make_cloud_message_callback()
 {
-    auth::Session s;
-    BBL::OnServerConnectedFn on_server;
-    BBL::OnMessageFn         on_msg;
-    BBL::GetSubscribeFailureFn on_sub_fail;
-    BBL::QueueOnMainFn       queue;
-    BBL::OnPrinterConnectedFn on_printer_connected;
-    std::shared_ptr<CloudSession> session;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        if (!cloud_session_) cloud_session_ = std::make_shared<CloudSession>();
-        session              = cloud_session_;
-        on_server            = on_server_connected_;
-        on_msg               = on_message_;
-        on_sub_fail          = on_subscribe_failure_;
-        queue                = queue_on_main_;
-        on_printer_connected = on_printer_connected_;
-    }
-
-    if (!auth_store_) {
-        OBN_WARN("connect_cloud: no auth store (config_dir not set yet)");
-        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
-    }
-    s = auth_store_->snapshot();
-    if (!s.logged_in()) {
-        OBN_WARN("connect_cloud: not logged in, skipping");
-        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
-    }
-
-    // Cloud TLS trust anchor:
-    //   - Linux/macOS: empty here -> mqtt_client falls back to the distro
-    //     trust store (/etc/ssl/certs/...), which validates *.bambulab.com
-    //     properly.
-    //   - Windows: vcpkg's static OpenSSL ships no default trust store, and
-    //     mosquitto_tls_set() rejects (cafile=null, capath=null) with
-    //     MOSQ_ERR_INVAL. *.bambulab.com serves an ordinary, publicly
-    //     trusted DigiCert-issued certificate (verified independently:
-    //     `openssl s_client -connect us.mqtt.bambulab.com:8883` chains to
-    //     DigiCert Global Root G2) -- it needs a normal CA bundle, not
-    //     anything Bambu-specific. Write out the vendored bundle (see
-    //     cloud_ca_bundle.hpp) and use that, with full chain + hostname
-    //     verification (CloudSession::start() no longer skips either
-    //     check now that this hands it a trust anchor that actually
-    //     validates the real chain).
-    //   - lan_tls_skip_verify = 1 disables both checks on every platform,
-    //     for TLS-inspecting proxies or a stale bundle.
-    std::string cloud_ca;
-#if defined(_WIN32)
-    cloud_ca = obn::tls::ensure_cloud_ca_bundle_file(config_dir());
-    if (cloud_ca.empty()) {
-        OBN_WARN("connect_cloud: failed to write vendored CA bundle; "
-                  "cloud MQTT connect will likely fail on Windows unless "
-                  "lan_tls_skip_verify = 1");
-    }
-#endif
-    session->configure(cloud_region(), s.user_id, s.access_token,
-                       std::move(cloud_ca));
-
-    // Trampoline callbacks onto Studio's UI thread where one is
-    // registered. The message callback is intentionally NOT queued:
-    // DeviceManager::on_push_message() is thread-aware and has its own
-    // fast-path handling.
-    auto on_connected_cb = [this, on_server, queue]
-        (int status, int reason, std::string /*msg*/)
-    {
-        OBN_INFO("cloud: server_connected status=%d reason=%d", status, reason);
-        if (on_server) {
-            auto invoke = [on_server, status, reason]() {
-                on_server(status, reason);
-            };
-            if (queue) queue(invoke); else invoke();
-        }
-        // CONNACK re-applies the whole subscription set, so this is where the
-        // devices Studio handed us before the connection came up become
-        // reachable. Ask them for a snapshot; on_printer_connected stays
-        // report-driven, so we never claim a powered-off printer is online.
-        if (status == 0) {
-            kickstart_cloud_status();
-        } else {
-            // A transport drop invalidates the broker-side subscriptions
-            // (CloudSession clears active_ too), and the status we hold may be
-            // minutes stale by the time we are back, so bootstrap again on the
-            // next CONNACK.
-            std::lock_guard<std::mutex> lk(mu_);
-            cloud_kickstarted_devs_.clear();
-        }
-    };
-
-    auto on_msg_cb = [this, on_msg]
+    return [this]
         (std::string dev_id, std::string json)
     {
         harvest_security_report(dev_id, json);
@@ -3346,8 +3259,107 @@ int Agent::connect_cloud()
             return;
         }
 
+        // Orca can register, replace or clear this handler after the cloud
+        // session starts (e.g. when switching printer agents). Read it for
+        // each report, then call it outside mu_ so it can re-enter Agent.
+        // Keep direct delivery: the slicer handles message threading itself.
+        BBL::OnMessageFn on_msg;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            on_msg = on_message_;
+        }
         if (on_msg) on_msg(std::move(dev_id), std::move(json));
     };
+}
+
+int Agent::connect_cloud()
+{
+    auth::Session s;
+    BBL::OnServerConnectedFn on_server;
+    BBL::GetSubscribeFailureFn on_sub_fail;
+    BBL::QueueOnMainFn       queue;
+    BBL::OnPrinterConnectedFn on_printer_connected;
+    std::shared_ptr<CloudSession> session;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!cloud_session_) cloud_session_ = std::make_shared<CloudSession>();
+        session              = cloud_session_;
+        on_server            = on_server_connected_;
+        on_sub_fail          = on_subscribe_failure_;
+        queue                = queue_on_main_;
+        on_printer_connected = on_printer_connected_;
+    }
+
+    if (!auth_store_) {
+        OBN_WARN("connect_cloud: no auth store (config_dir not set yet)");
+        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
+    }
+    s = auth_store_->snapshot();
+    if (!s.logged_in()) {
+        OBN_WARN("connect_cloud: not logged in, skipping");
+        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
+    }
+
+    // Cloud TLS trust anchor:
+    //   - Linux/macOS: empty here -> mqtt_client falls back to the distro
+    //     trust store (/etc/ssl/certs/...), which validates *.bambulab.com
+    //     properly.
+    //   - Windows: vcpkg's static OpenSSL ships no default trust store, and
+    //     mosquitto_tls_set() rejects (cafile=null, capath=null) with
+    //     MOSQ_ERR_INVAL. *.bambulab.com serves an ordinary, publicly
+    //     trusted DigiCert-issued certificate (verified independently:
+    //     `openssl s_client -connect us.mqtt.bambulab.com:8883` chains to
+    //     DigiCert Global Root G2) -- it needs a normal CA bundle, not
+    //     anything Bambu-specific. Write out the vendored bundle (see
+    //     cloud_ca_bundle.hpp) and use that, with full chain + hostname
+    //     verification (CloudSession::start() no longer skips either
+    //     check now that this hands it a trust anchor that actually
+    //     validates the real chain).
+    //   - lan_tls_skip_verify = 1 disables both checks on every platform,
+    //     for TLS-inspecting proxies or a stale bundle.
+    std::string cloud_ca;
+#if defined(_WIN32)
+    cloud_ca = obn::tls::ensure_cloud_ca_bundle_file(config_dir());
+    if (cloud_ca.empty()) {
+        OBN_WARN("connect_cloud: failed to write vendored CA bundle; "
+                  "cloud MQTT connect will likely fail on Windows unless "
+                  "lan_tls_skip_verify = 1");
+    }
+#endif
+    session->configure(cloud_region(), s.user_id, s.access_token,
+                       std::move(cloud_ca));
+
+    // Trampoline callbacks onto Studio's UI thread where one is
+    // registered. The message callback is intentionally NOT queued:
+    // DeviceManager::on_push_message() is thread-aware and has its own
+    // fast-path handling.
+    auto on_connected_cb = [this, on_server, queue]
+        (int status, int reason, std::string /*msg*/)
+    {
+        OBN_INFO("cloud: server_connected status=%d reason=%d", status, reason);
+        if (on_server) {
+            auto invoke = [on_server, status, reason]() {
+                on_server(status, reason);
+            };
+            if (queue) queue(invoke); else invoke();
+        }
+        // CONNACK re-applies the whole subscription set, so this is where the
+        // devices Studio handed us before the connection came up become
+        // reachable. Ask them for a snapshot; on_printer_connected stays
+        // report-driven, so we never claim a powered-off printer is online.
+        if (status == 0) {
+            kickstart_cloud_status();
+        } else {
+            // A transport drop invalidates the broker-side subscriptions
+            // (CloudSession clears active_ too), and the status we hold may be
+            // minutes stale by the time we are back, so bootstrap again on the
+            // next CONNACK.
+            std::lock_guard<std::mutex> lk(mu_);
+            cloud_kickstarted_devs_.clear();
+        }
+    };
+
+    auto on_msg_cb = make_cloud_message_callback();
 
     auto on_sub_fail_cb = [this, on_sub_fail](std::string dev_id) {
         if (on_sub_fail) {
