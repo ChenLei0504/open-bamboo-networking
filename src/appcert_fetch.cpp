@@ -410,6 +410,19 @@ bool fetch_and_store(std::string* err)
     const std::string key_blob = root->find("key").as_string();
     if (cert_pem.empty())
         return fail("response carries no cert: " + body_prefix(resp.body, 300));
+    // Firmware needs the full leaf -> intermediate -> application_root
+    // chain (research/08.04-lan.md): a leaf-only install answers SUCCESS
+    // but later rejects every signed command with err_code 84033547.
+    std::size_t pem_blocks = 0;
+    for (std::size_t p = cert_pem.find("-----BEGIN CERTIFICATE-----");
+         p != std::string::npos;
+         p = cert_pem.find("-----BEGIN CERTIFICATE-----", p + 1))
+        ++pem_blocks;
+    if (pem_blocks < 3)
+        OBN_WARN("appcert fetch: cert carries %zu PEM block(s); firmware "
+                 "needs the full 3-cert chain (leaf, intermediate, "
+                 "application_root) or signed commands fail with "
+                 "err_code 84033547", pem_blocks);
     if (crl_pem.empty())
         return fail("response carries no crl: " + body_prefix(resp.body, 300));
     if (key_blob.empty())

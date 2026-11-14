@@ -53,7 +53,9 @@ int main() {
 
     // ---- err_code lookups: seeded xerr rows + decimal->hex print_error.
     CHECK(!obn::err::describe_err_code("84033543").empty());
+    CHECK(!obn::err::describe_err_code("84033544").empty());
     CHECK(!obn::err::describe_err_code("84033545").empty());
+    CHECK(!obn::err::describe_err_code("84033547").empty());
     CHECK(!obn::err::describe_err_code("1035").empty());   // generic xerr REST row
     CHECK(!obn::err::describe_err_code("83902527").empty()); // -> 0500403f
     CHECK(obn::err::describe_err_code("").empty());
@@ -76,8 +78,8 @@ int main() {
     CHECK(obn::err::hms_entry_count() == 3958);
     CHECK(obn::err::print_error_entry_count() == 539);
 
-    // 113 = 111 REST rows (the 111-entry source table, ERR-01 criterion 1) + 2 MQTT-security rows
-    CHECK(obn::err::xerr_entry_count() == 113);
+    // 115 = 111 REST rows (the 111-entry source table, ERR-01 criterion 1) + 4 MQTT-security rows
+    CHECK(obn::err::xerr_entry_count() == 115);
 
     // Reused code 1018 (source-row order): both meanings surface through
     // the "; " join, and the second MQTT-security row decodes too.

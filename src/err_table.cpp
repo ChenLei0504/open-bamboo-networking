@@ -35,8 +35,8 @@ namespace {
 // facts; every message below is our own one-sentence wording). Sorted by
 // numeric code; rows sharing a reused code (1018, 1022, 1043, 1063) sit
 // adjacent in source-table row order so describe_err_code joins them in
-// that order with "; ". Full census: 113 = 111 REST rows (the 111-entry
-// source table, ERR-01 criterion 1) + 2 MQTT-security rows.
+// that order with "; ". Full census: 115 = 111 REST rows (the 111-entry
+// source table, ERR-01 criterion 1) + 4 MQTT-security rows.
 struct XerrRow {
     unsigned long code;
     const char* message;
@@ -156,8 +156,14 @@ const XerrRow kXerrRows[] = {
     {10003, "The upstream service answered with a negative response."}, // HTTP 500
     {84033543, "The printer rejected an MQTT command because its "
                "per-command signature was missing or invalid."}, // MQTT command-security
+    {84033544, "The printer rejected a print command at file verification "
+               "(wrong md5, plaintext url instead of url_enc, or reused "
+               "sequence_id)."}, // MQTT command-security
     {84033545, "The printer rejected a command because its signature "
                "or task-id did not verify."}, // MQTT command-security
+    {84033547, "The printer could not build a certificate path for the "
+               "installed app cert chain (missing intermediate CA), so "
+               "the signature did not verify."}, // MQTT command-security
 };
 
 const std::size_t kXerrRowCount = sizeof(kXerrRows) / sizeof(kXerrRows[0]);
