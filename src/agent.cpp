@@ -2207,7 +2207,7 @@ void Agent::notify_local_message(const std::string& dev_id, const std::string& j
             const std::string model_key = obn::cover_model_key(patched);
             cover_cache::ensure(host, dev_id, user, pass,
                                 subtask_name, model_key, plate_idx,
-                                cover_version);
+                                cover_version, bambu_ca_bundle_path());
         }
     }
 
