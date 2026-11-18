@@ -418,11 +418,13 @@ bool fetch_and_store(std::string* err)
          p != std::string::npos;
          p = cert_pem.find("-----BEGIN CERTIFICATE-----", p + 1))
         ++pem_blocks;
+    // Refuse to store one: a short chain would replace good material and
+    // slicer_app_cert_usable() blocks its install anyway (60s retry).
     if (pem_blocks < 3)
-        OBN_WARN("appcert fetch: cert carries %zu PEM block(s); firmware "
-                 "needs the full 3-cert chain (leaf, intermediate, "
-                 "application_root) or signed commands fail with "
-                 "err_code 84033547", pem_blocks);
+        return fail("response cert carries " + std::to_string(pem_blocks) +
+                    " PEM block(s); firmware needs the full 3-cert chain "
+                    "(leaf, intermediate, application_root) or signed "
+                    "commands fail with err_code 84033547");
     if (crl_pem.empty())
         return fail("response carries no crl: " + body_prefix(resp.body, 300));
     if (key_blob.empty())
