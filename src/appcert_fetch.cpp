@@ -17,6 +17,14 @@
 // Response: JSON { code, message, cert (PEM, string|array), crl (PEM,
 // string|array), key (base64 blob) }. The key blob unwraps with the custom
 // appcert cipher into RSA CRT limbs -> PEM.
+//
+// Refresh (stock agents >= 02.08.04, research/10.01): when a cert/key pair
+// is already on disk, GET .../applications/{leaf-CN}/status returns
+// { code, message, cert, crl } and no key, so the private key never travels
+// and the stored one is kept after a modulus cross-check. The /cert
+// envelope answers HTTP 400 code 101 ("application is outdated", live
+// 2026-11-19), so /status is the only working refresh; /cert stays as the
+// first-install source of a key.
 
 #include "obn/appcert.hpp"
 #include "obn/config.hpp"
@@ -251,6 +259,33 @@ std::string resolve_key_path_local()
     return obn::config::path_in_dir("slicer_key.pem");
 }
 
+// Whole file, or empty when missing/unreadable.
+std::string read_file_bytes(const std::string& path)
+{
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return {};
+    std::string out;
+    char buf[4096];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+// Subject CN of the first certificate of `chain` (empty on failure) — the
+// {leaf-CN} path segment of the /status endpoint (research/10.01).
+std::string leaf_cn(const std::string& chain)
+{
+    std::unique_ptr<X509, X509Del> x = parse_leaf(chain, nullptr);
+    if (!x) return {};
+    char field[256] = {};
+    if (X509_NAME_get_text_by_NID(X509_get_subject_name(x.get()),
+                                  NID_commonName, field, sizeof(field)) <= 0)
+        return {};
+    return field;
+}
+
 std::string resolved_path_or(const std::string& cfg_value,
                              const char* basename)
 {
@@ -275,6 +310,118 @@ BIGNUM* key_pem_modulus(const std::string& pem, std::string* err)
         return nullptr;
     }
     return pkey_modulus(pk.get());
+}
+
+// Refresh over GET /applications/{leaf-CN}/status (what stock agents >=
+// 02.08.04 call, research/10.01): response is { code, message, cert, crl }
+// with no `key` field, so the private key on disk is the only one and is
+// kept after a modulus cross-check against the new leaf.
+bool fetch_status_refresh(const std::string& dir, std::string* err)
+{
+    auto fail = [err](const std::string& e) -> bool {
+        if (err) *err = e;
+        OBN_ERROR("appcert status fetch: %s", e.c_str());
+        return false;
+    };
+
+    const std::string old_cert =
+        read_file_bytes(resolved_path_or({}, "slicer_cert.pem"));
+    const std::string old_key = read_file_bytes(resolve_key_path_local());
+    if (old_cert.empty() || old_key.empty())
+        return fail("no stored cert/key pair to refresh from");
+    const std::string cn = leaf_cn(old_cert);
+    if (cn.empty()) return fail("stored cert has no subject CN");
+
+    const std::string host =
+        obn::config::cloud_api_host_for(obn::config::current(), "GLOBAL");
+    const std::string url = host +
+        "/v1/iot-service/api/user/applications/" + cn + "/status";
+    OBN_INFO("appcert fetch: GET %s/v1/iot-service/api/user/applications/"
+             "%s/status (cert + crl, key stays on disk)",
+             host.c_str(), cn.c_str());
+    obn::http::global_init();
+    const obn::http::Response resp = obn::http::get_json(url);
+    if (!resp.error.empty())
+        return fail("transport error: " + resp.error);
+    if (resp.status_code != 200)
+        return fail("HTTP " + std::to_string(resp.status_code) + ": " +
+                    body_prefix(resp.body, 300));
+
+    std::string perr;
+    auto root = obn::json::parse(resp.body, &perr);
+    if (!root)
+        return fail("response is not JSON (" + perr + "): " +
+                    body_prefix(resp.body, 200));
+    const auto code_v = root->find("code");
+    bool code_ok = true;
+    if (code_v.is_number()) code_ok = code_v.as_int() == 0;
+    else if (code_v.is_string())
+        code_ok = code_v.as_string().empty() || code_v.as_string() == "0";
+    const std::string msg = root->find("message").as_string();
+    if (!code_ok && msg != "success")
+        return fail("API error: " + body_prefix(resp.body, 300));
+
+    const auto join_field = [&root](const char* name) -> std::string {
+        const auto v = root->find(name);
+        std::string out;
+        if (v.is_string()) out = v.as_string();
+        else if (v.is_array()) {
+            for (const auto& e : v.as_array()) out += e.as_string();
+        }
+        return out;
+    };
+    const std::string cert_pem = join_field("cert");
+    const std::string crl_pem  = join_field("crl");
+    if (cert_pem.empty())
+        return fail("response carries no cert: " + body_prefix(resp.body, 300));
+    std::size_t pem_blocks = 0;
+    for (std::size_t p = cert_pem.find("-----BEGIN CERTIFICATE-----");
+         p != std::string::npos;
+         p = cert_pem.find("-----BEGIN CERTIFICATE-----", p + 1))
+        ++pem_blocks;
+    if (pem_blocks < 3)
+        return fail("response cert carries " + std::to_string(pem_blocks) +
+                    " PEM block(s); firmware needs the full 3-cert chain "
+                    "(leaf, intermediate, application_root) or signed "
+                    "commands fail with err_code 84033547");
+    if (crl_pem.empty())
+        return fail("response carries no crl: " + body_prefix(resp.body, 300));
+
+    // The new leaf must pair with the stored key: /status never returns a
+    // key, so a leaf for an identity we hold no key for would leave us
+    // signing nothing. Refuse instead of installing it.
+    std::unique_ptr<X509, X509Del> leaf = parse_leaf(cert_pem, nullptr);
+    if (!leaf) return fail("response cert is not a valid X.509 PEM chain");
+    std::unique_ptr<EVP_PKEY, PkeyDel> leaf_pub(X509_get_pubkey(leaf.get()));
+    std::unique_ptr<BIGNUM, void (*)(BIGNUM*)> leaf_n(
+        pkey_modulus(leaf_pub.get()), BN_free);
+    std::unique_ptr<BIGNUM, void (*)(BIGNUM*)> key_n(
+        key_pem_modulus(old_key, nullptr), BN_free);
+    if (!leaf_n || !key_n)
+        return fail("cannot compare leaf / stored key moduli");
+    if (BN_cmp(leaf_n.get(), key_n.get()) != 0)
+        return fail("response leaf does not match the stored private key "
+                    "(identity rotated; the new key is not on this wire)");
+
+    // cert first, then CRL; the key file is never touched.
+    struct FileOut { const char* name; const std::string* bytes; };
+    const FileOut files[] = {
+        {"slicer_cert.pem", &cert_pem},
+        {"slicer_crl.pem", &crl_pem},
+    };
+    for (const auto& fo : files) {
+        std::string werr;
+        const std::string path = resolved_path_or({}, fo.name);
+        const std::string& body = *fo.bytes;
+        const std::string data =
+            (!body.empty() && body.back() == '\n') ? body : body + "\n";
+        if (!write_file_atomic(path, data, &werr)) return fail(werr);
+    }
+    obn::signing::invalidate_cache();
+
+    OBN_INFO("appcert fetch: ok (status) — wrote slicer_cert/crl into %s "
+             "(leaf CN %s, key untouched)", dir.c_str(), cn.c_str());
+    return true;
 }
 
 } // namespace
@@ -323,6 +470,15 @@ bool fetch_and_store(std::string* err)
     const std::string dir = obn::config::dir();
     if (dir.empty())
         return fail("config dir not set (set_config_dir not called)");
+    // Existing cert/key -> refresh over /status (cert + crl only, key kept);
+    // no stored pair -> the legacy /cert envelope below, the only first
+    // source of a key (live 2026-11-19 it answers HTTP 400 code 101).
+    if (!read_file_bytes(resolved_path_or({}, "slicer_cert.pem")).empty() &&
+        !read_file_bytes(resolve_key_path_local()).empty()) {
+        std::string serr;
+        if (fetch_status_refresh(dir, &serr)) return true;
+        return fail(serr);
+    }
     // Secret resolution: OBN_CLIENT_AUTH_SECRET env, else an imported
     // <config_dir>/client_auth_secret.txt (one line, 43 ASCII bytes — the
     // install UI drop point for clean-room builds), else the embedded
