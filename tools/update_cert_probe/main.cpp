@@ -12,6 +12,7 @@
 //
 // Usage:
 //   update_cert_probe --plugin <bambu_networking.dll> --data-dir <fresh dir>
+//                     [--allow-existing]
 
 #include <openssl/bio.h>
 #include <openssl/pem.h>
@@ -99,26 +100,37 @@ int main(int argc, char** argv)
 {
     std::string plugin_path;
     std::string data_dir;
-    for (int i = 1; i + 1 < argc; i += 2) {
+    bool allow_existing = false;
+    for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--plugin")     plugin_path = argv[i + 1];
-        else if (a == "--data-dir") data_dir = argv[i + 1];
+        if (a == "--allow-existing") { allow_existing = true; continue; }
+        if (i + 1 >= argc) {
+            std::cerr << "missing value for option: " << a << "\n";
+            return 2;
+        }
+        if (a == "--plugin")     plugin_path = argv[++i];
+        else if (a == "--data-dir") data_dir = argv[++i];
         else {
             std::cerr << "unknown option: " << a << "\n";
             return 2;
         }
     }
     if (plugin_path.empty() || data_dir.empty()) {
-        std::cerr << "usage: update_cert_probe --plugin <dll> --data-dir <fresh dir>\n";
+        std::cerr << "usage: update_cert_probe --plugin <dll> --data-dir <fresh dir> "
+                     "[--allow-existing]\n";
         return 2;
     }
 
     // Fresh-room proof: an existing credential would make a pass ambiguous.
+    // --allow-existing opts into the /status refresh pass instead (cert and
+    // CRL are rewritten, the key must survive untouched).
     std::error_code ec;
     fs::create_directories(data_dir, ec);
-    if (fs::exists(fs::path(data_dir) / "slicer_key.pem", ec)) {
+    if (!allow_existing &&
+        fs::exists(fs::path(data_dir) / "slicer_key.pem", ec)) {
         std::cerr << "FAIL: " << data_dir
-                  << " already contains slicer_key.pem — use a fresh dir\n";
+                  << " already contains slicer_key.pem — use a fresh dir "
+                     "(or pass --allow-existing for a /status refresh pass)\n";
         return 2;
     }
 
