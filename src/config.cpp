@@ -134,8 +134,8 @@ void apply_key(Settings& out, const std::string& key, const std::string& val)
     else if (key == "client_name")                 out.client_name = val;
     else if (key == "executable_info")             out.executable_info = val;
     else if (key == "mytask_pop") {
-        // `auto` and an absent key both mean the region-based default
-        // (PoP on CN, historical bearer-only request elsewhere).
+        // `auto` and an absent key both mean the default: PoP on in every
+        // region (mytask_pop_set stays false).
         const bool explicit_val = to_lower(val) != "auto";
         out.mytask_pop_set = explicit_val;
         out.mytask_pop      = explicit_val ? truthy(val) : false;

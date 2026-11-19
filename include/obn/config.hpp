@@ -135,18 +135,18 @@ struct Settings {
 
     // Attach proof-of-possession headers (`x-bbl-app-certification-id` +
     // `x-bbl-device-security-sign`) to POST /v1/user-service/my/task.
-    // Default (key absent or `auto`) decides by region: the CN cloud
-    // answers 403 to the bearer-only request that api.bambulab.com accepts
-    // for the same account and client name (H2D report 2026-10-08,
-    // obn(2).log) and research 10.05 lists /my/task as PoP-required on
-    // secured printers, so the pair is attached on CN and the historical
-    // bearer-only request is kept elsewhere. Set 1 to force the pair on for
+    // Default (key absent or `auto`) attaches the pair in every region:
+    // without it the cloud signs the MQTT dispatch without its service
+    // certificate and the printer rejects the task (84033543 on
+    // api.bambulab.com, P1S fw 01.10.00.18, 2026-11-17; research 13.05),
+    // and the CN cloud additionally 403s the bearer-only request (H2D
+    // report 2026-10-08, research 10.05). Set 1 to force the pair on for
     // any region, 0 to force it off (including CN). add_pop_headers
     // silently sends nothing when the slicer key/cert material is absent or
-    // mismatched, so `auto` is safe on accounts without credentials.
+    // mismatched, so the default is safe on accounts without credentials.
     bool mytask_pop = false;
     // Whether obn.conf carries an explicit mytask_pop = 0/1, as opposed to
-    // the absent-key (or `mytask_pop = auto`) region-based default.
+    // the absent-key (or `mytask_pop = auto`) default-on behaviour.
     bool mytask_pop_set = false;
 
     // BambuSource logging — propagated to libBambuSource via obn.env

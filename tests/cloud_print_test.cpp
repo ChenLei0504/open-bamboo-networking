@@ -832,7 +832,7 @@ static void test_md5_file_hex_upper_matches_stock_style()
 }
 
 // ---------------------------------------------------------------------------
-// mytask_pop: PoP headers on POST /my/task (default auto = CN only)
+// mytask_pop: PoP headers on POST /my/task (default = on in every region)
 // ---------------------------------------------------------------------------
 
 // Write a throwaway RSA key + matching self-signed leaf as slicer_key.pem /
@@ -885,16 +885,35 @@ static bool write_test_signing_material(const std::filesystem::path& dir)
     return ok;
 }
 
-static void test_mytask_pop_default_global_off()
+static void test_mytask_pop_default_on()
 {
-    // Default Settings (no obn.conf loaded yet): auto means the historical
-    // bearer-only request outside CN.
-    std::map<std::string, std::string> hdrs;
-    hdrs["X-BBL-Client-Name"] = "BambuStudio";
-    CHECK(!obn::cloud_print::test_apply_mytask_pop(hdrs, "GLOBAL"));
-    CHECK(hdrs.count("x-bbl-app-certification-id") == 0);
-    CHECK(hdrs.count("x-bbl-device-security-sign") == 0);
-    CHECK(hdrs.at("X-BBL-Client-Name") == "BambuStudio");
+    // Default Settings (no mytask_pop key): the pair attaches in every
+    // region, because an unsigned dispatch fails printer verification.
+    const auto dir = std::filesystem::temp_directory_path()
+                     / "obn-mytask-pop-default";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    CHECK(write_test_signing_material(dir));
+    {
+        std::ofstream out(dir / "obn.conf");
+        out << "\n";
+    }
+    obn::config::load_or_create(dir.string());
+    obn::signing::invalidate_cache();
+
+    std::map<std::string, std::string> global;
+    global["X-BBL-Client-Name"] = "BambuStudio";
+    CHECK(obn::cloud_print::test_apply_mytask_pop(global, "GLOBAL"));
+    CHECK(global.count("x-bbl-app-certification-id") == 1);
+    CHECK(global.count("x-bbl-device-security-sign") == 1);
+    CHECK(global.at("X-BBL-Client-Name") == "BambuStudio");
+
+    std::map<std::string, std::string> cn;
+    CHECK(obn::cloud_print::test_apply_mytask_pop(cn, "CN"));
+    CHECK(cn.count("x-bbl-app-certification-id") == 1);
+    CHECK(cn.count("x-bbl-device-security-sign") == 1);
+
+    std::filesystem::remove_all(dir);
 }
 
 static void test_mytask_pop_on_without_material_is_noop()
@@ -935,7 +954,7 @@ static void test_mytask_pop_on_with_material_attaches_pair()
     obn::config::load_or_create(dir.string());
     obn::signing::invalidate_cache();
 
-    // Forced on: attaches for a global region, where auto would not.
+    // Forced on: attaches for a global region.
     std::map<std::string, std::string> hdrs;
     hdrs["X-BBL-Client-Name"] = "BambuStudio";
     CHECK(obn::cloud_print::test_apply_mytask_pop(hdrs, "GLOBAL"));
@@ -951,7 +970,7 @@ static void test_mytask_pop_on_with_material_attaches_pair()
     CHECK(hdrs.at("X-BBL-Client-Name") == "BambuStudio");
 
     // Explicit 0 forces the pair off even on the CN cloud, where the
-    // region-based default would attach it.
+    // default would attach it.
     {
         std::ofstream out(dir / "obn.conf");
         out << "mytask_pop = 0\n";
@@ -965,9 +984,9 @@ static void test_mytask_pop_on_with_material_attaches_pair()
     std::filesystem::remove_all(dir);
 }
 
-static void test_mytask_pop_auto_follows_region()
+static void test_mytask_pop_auto_on_everywhere()
 {
-    // Default (key absent): the pair attaches on CN and stays off elsewhere.
+    // `auto` behaves like the absent key: the pair attaches in every region.
     const auto dir = std::filesystem::temp_directory_path()
                      / "obn-mytask-pop-auto";
     std::filesystem::remove_all(dir);
@@ -981,9 +1000,9 @@ static void test_mytask_pop_auto_follows_region()
     obn::signing::invalidate_cache();
 
     std::map<std::string, std::string> global;
-    CHECK(!obn::cloud_print::test_apply_mytask_pop(global, "GLOBAL"));
-    CHECK(global.count("x-bbl-app-certification-id") == 0);
-    CHECK(global.count("x-bbl-device-security-sign") == 0);
+    CHECK(obn::cloud_print::test_apply_mytask_pop(global, "GLOBAL"));
+    CHECK(global.count("x-bbl-app-certification-id") == 1);
+    CHECK(global.count("x-bbl-device-security-sign") == 1);
 
     std::map<std::string, std::string> cn;
     CHECK(obn::cloud_print::test_apply_mytask_pop(cn, "CN"));
@@ -1202,10 +1221,10 @@ int main()
     test_md5_file_hex_upper_matches_stock_style();
 
     // Runs last: these load obn.conf into the process-global config.
-    test_mytask_pop_default_global_off();
+    test_mytask_pop_default_on();
     test_mytask_pop_on_without_material_is_noop();
     test_mytask_pop_on_with_material_attaches_pair();
-    test_mytask_pop_auto_follows_region();
+    test_mytask_pop_auto_on_everywhere();
     test_should_retry_mytask_pop_decision();
     test_platform_for_leaf_pem();
     test_cloud_platform_headers();

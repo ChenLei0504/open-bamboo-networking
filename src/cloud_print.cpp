@@ -711,12 +711,13 @@ std::string build_task_body(const BBL::PrintParams& p,
 
 // Attach the obn.conf mytask_pop signing pair to the /my/task headers.
 //
-// The default (key absent or `auto`) decides by region: the CN cloud
-// answers 403 to the bearer-only request that api.bambulab.com accepts
-// for the same account and client name (H2D report 2026-10-08,
-// obn(2).log: client_name=BambuStudio, still 403; research/10.05 lists
-// /my/task as PoP-required on secured printers), so the pair is attached
-// there and the long-standing behaviour is kept everywhere else.
+// The default (key absent or `auto`) attaches the pair in every region:
+// without it the cloud signs the MQTT dispatch without its service
+// certificate and the printer rejects the task (84033543 on
+// api.bambulab.com, P1S fw 01.10.00.18, 2026-11-17; research/13.05),
+// and the CN cloud additionally 403s the bearer-only request (H2D
+// report 2026-10-08; research/10.05 lists /my/task as PoP-required on
+// secured printers).
 // mytask_pop = 1 forces the pair on for any region, 0 forces it off
 // (including CN). On, we attach x-bbl-app-certification-id +
 // x-bbl-device-security-sign. add_pop_headers is best-effort and
@@ -734,8 +735,7 @@ bool apply_mytask_pop(std::map<std::string, std::string>& hdrs,
                       const std::string& region)
 {
     const auto& cfg = obn::config::current();
-    const bool on = cfg.mytask_pop_set ? cfg.mytask_pop
-                                       : obn::config::is_cn_region(region);
+    const bool on = !cfg.mytask_pop_set || cfg.mytask_pop;
     if (!on) {
         OBN_DEBUG("cloud_print: mytask_pop off (region=%s); PoP headers omitted",
                   region.c_str());
@@ -758,7 +758,8 @@ bool apply_mytask_pop(std::map<std::string, std::string>& hdrs,
 // A 403 on the bearer-only request is the only signal worth a retry with
 // more headers: H2D printers answer 403 on /my/task without the
 // proof-of-possession pair on every cloud region (issue #6, user reports;
-// mytask_pop=auto only attaches on CN), while any other status means the
+// the default pair now attaches everywhere, so a bare 403 here means the
+// signing material was missing), while any other status means the
 // failure has another cause that extra headers will not fix.
 bool should_retry_mytask_pop(int status_code, bool pop_attached)
 { return status_code == 403 && !pop_attached; }

@@ -272,19 +272,17 @@ executable_info =
 # x-bbl-device-security-sign) to POST /v1/user-service/my/task, the call
 # that registers a cloud print with MakerWorld.
 #
-#   auto  Default. Attach the pair on the CN cloud (api.bambulab.cn),
-#         where the bearer-only request answers 403, and keep the
-#         historical bearer-only request elsewhere (api.bambulab.com
-#         accepts it). Same as leaving this key out.
-#   1     Force the pair on for any region. Try this when cloud print
-#         fails with HTTP 403 on /my/task while client_name is already
-#         "BambuStudio" and every other API answers 200, and research/
-#         10.05 lists /my/task as proof-of-possession-required on a
-#         verified printer.
+#   auto  Default. Attach the pair in every region: the cloud signs the
+#         MQTT dispatch with its service certificate only when this
+#         request carries the pair, and the printer rejects an unsigned
+#         dispatch (84033543, P1S firmware 01.10.00.18, 2026-11-17;
+#         research/13.05). Same as leaving this key out.
+#   1     Force the pair on for any region (same as auto; kept so
+#         explicit configs keep working).
 #   0     Force the pair off, including on the CN cloud.
 #
-# No slicer key/cert present means no headers are sent, so `auto` is safe
-# on accounts without signing material.
+# No slicer key/cert present means no headers are sent, so the default is
+# safe on accounts without signing material.
 
 mytask_pop = auto
 

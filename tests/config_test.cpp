@@ -222,7 +222,7 @@ static int test_new_keys_defaults()
     CHECK(cfg.bambusource_log_to_file.empty());
     CHECK(cfg.bambusource_log_file.empty());
     CHECK(cfg.mytask_pop == false);
-    CHECK(cfg.mytask_pop_set == false); // absent = region-based auto default
+    CHECK(cfg.mytask_pop_set == false); // absent = default (PoP on everywhere)
     return 0;
 }
 
