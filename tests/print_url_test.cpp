@@ -31,12 +31,12 @@ int main()
     CHECK(obn::print_job::build_ftp_url("foo.gcode.3mf")
           == "ftp://foo.gcode.3mf");
 
-    // Spaces stay in the stored file name; the dispatched URL percent-encodes
-    // them (issue #23).
+    // Spaces stay raw in the dispatched URL: firmware matches the STOR name
+    // literally and rejects %20 with 83902467 (unable to parse the file).
     CHECK(obn::print_job::build_ftp_url("/Pre-filter V6b X1C x6.gcode.3mf")
-          == "ftp://Pre-filter%20V6b%20X1C%20x6.gcode.3mf");
+          == "ftp://Pre-filter V6b X1C x6.gcode.3mf");
     CHECK(obn::print_job::build_ftp_url("cache/a b.gcode.3mf")
-          == "ftp://cache/a%20b.gcode.3mf");
+          == "ftp://cache/a b.gcode.3mf");
     CHECK(obn::print_job::build_ftp_url("plain.gcode.3mf")
           == "ftp://plain.gcode.3mf");
 
