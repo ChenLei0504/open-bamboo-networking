@@ -97,7 +97,21 @@ std::string build_file_url(const std::string& absolute_path)
 
 std::string build_ftp_url(const std::string& stored_path)
 {
-    return "ftp://" + strip_leading_slash(stored_path);
+    // Cloud dispatch hands this string to firmware, which parses it as a URL
+    // before resolving <file> on the printer's FTPS volume (research/08.08 §URL
+    // schemes); a raw space is not valid in a URI path (issue #23, X1C refuses
+    // the project_file). The STOR name keeps the user's spaces, so encode only
+    // them and let firmware decode %20 back to it.
+    // shortcut: only ' ' is encoded — other reserved characters (?, #, %) stay
+    // literal until a report shows they break too.
+    std::string path = strip_leading_slash(stored_path);
+    std::string out  = "ftp://";
+    out.reserve(out.size() + path.size() + 8);
+    for (char c : path) {
+        if (c == ' ') out += "%20";
+        else out += c;
+    }
+    return out;
 }
 
 std::string build_ftp_remote_path(const BBL::PrintParams& p,

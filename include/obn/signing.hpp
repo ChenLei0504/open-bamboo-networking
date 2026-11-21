@@ -100,6 +100,15 @@ std::string slicer_crl_pem();
 // successful install for the device (Studio polls ~1 Hz).
 bool slicer_app_cert_usable();
 
+// True when slicer_crl.pem holds a CRL whose nextUpdate is already past
+// (absent / unparsable / no nextUpdate -> false). slicer_app_cert_usable()
+// still returns true for a stale CRL — firmware has accepted past-nextUpdate
+// CRLs — but app_cert_install with one fails on printers that do check it
+// (issue #23: install result=fail every tick, fetch never runs). Callers use
+// this to kick ensure_app_cert_material_() instead of re-installing the same
+// stale chain.
+bool slicer_crl_expired();
+
 // True when a PEM blob carries the full 3-cert app chain firmware needs to
 // build a path to its BBL CA root (leaf -> intermediate -> application_root);
 // fewer blocks install as SUCCESS but every signed command then fails with

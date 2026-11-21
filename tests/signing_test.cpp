@@ -21,6 +21,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
+#include <ctime>
 #include <fcntl.h>
 #include <iostream>
 #include <memory>
@@ -257,6 +258,70 @@ static bool write_test_slicer_cert(const char* path, EVP_PKEY* key)
     std::fclose(f);
     X509_free(cert);
     return ok == 1;
+}
+
+// Self-signed CRL issued by the same CN the test leaf uses, with
+// lastUpdate one hour back and nextUpdate `next_offset` seconds from now
+// (negative -> already expired). Returns false on any OpenSSL failure.
+static bool write_test_crl(const char* path, EVP_PKEY* key, long next_offset)
+{
+    X509_CRL* crl = X509_CRL_new();
+    if (!crl) return false;
+    X509_NAME* name = X509_NAME_new();
+    if (!name ||
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+            reinterpret_cast<const unsigned char*>("GLOF3813734089.bambulab.com"),
+            -1, -1, 0) != 1) {
+        X509_NAME_free(name);
+        X509_CRL_free(crl);
+        return false;
+    }
+    const int named = X509_CRL_set_issuer_name(crl, name);
+    X509_NAME_free(name);
+    ASN1_TIME* last = ASN1_TIME_set(nullptr, std::time(nullptr) - 3600);
+    ASN1_TIME* next = ASN1_TIME_set(nullptr, std::time(nullptr) + next_offset);
+    const int timed = (last && next) &&
+                      X509_CRL_set1_lastUpdate(crl, last) == 1 &&
+                      X509_CRL_set1_nextUpdate(crl, next) == 1;
+    ASN1_TIME_free(last);
+    ASN1_TIME_free(next);
+    if (named != 1 || !timed ||
+        X509_CRL_sign(crl, key, EVP_sha256()) == 0) {
+        X509_CRL_free(crl);
+        return false;
+    }
+    FILE* f = std::fopen(path, "w");
+    if (!f) { X509_CRL_free(crl); return false; }
+    const int ok = PEM_write_X509_CRL(f, crl);
+    std::fclose(f);
+    X509_CRL_free(crl);
+    return ok == 1;
+}
+
+// slicer_crl_expired() is what kicks the shared-credential fetch when the
+// installed CRL went stale: usable-but-expired material must be detected as
+// expired, fresh material must not (issue #23).
+namespace obn::config {
+    Settings& test_settings();
+}
+
+static int test_slicer_crl_expired(const std::string& crl_path, EVP_PKEY* key)
+{
+    std::string& crl_cfg = obn::config::test_settings().slicer_crl_pem;
+
+    crl_cfg.clear();
+    CHECK(!obn::signing::slicer_crl_expired());
+
+    CHECK(write_test_crl(crl_path.c_str(), key, 3600));
+    crl_cfg = crl_path;
+    CHECK(!obn::signing::slicer_crl_expired());
+
+    CHECK(write_test_crl(crl_path.c_str(), key, -3600));
+    CHECK(obn::signing::slicer_crl_expired());
+
+    crl_cfg.clear();
+    std::remove(crl_path.c_str());
+    return 0;
 }
 
 static int test_app_cert_chain_complete()
@@ -636,6 +701,7 @@ int main()
 
     obn::config::test_settings().slicer_key_pem  = pem_path;
     obn::config::test_settings().slicer_cert_pem = cert_path;
+    const std::string crl_path = pem_path + ".crl.pem";
 
     int rc = 0;
     if (test_non_print_passthrough()       != 0) rc = 1;
@@ -643,6 +709,7 @@ int main()
     if (test_cert_id_constant()            != 0) rc = 1;
     if (test_app_certification_id_http_format() != 0) rc = 1;
     if (test_app_cert_chain_complete()      != 0) rc = 1;
+    if (test_slicer_crl_expired(crl_path, g_test_key) != 0) rc = 1;
     if (test_sign_alg_and_ver()            != 0) rc = 1;
     if (test_payload_len_matches_to_sign() != 0) rc = 1;
     if (test_signature_verifies()          != 0) rc = 1;
@@ -666,6 +733,7 @@ int main()
     // Cleanup.
     unlink(pem_path.c_str());
     unlink(cert_path.c_str());
+    unlink(crl_path.c_str());
     EVP_PKEY_free(g_test_key);
     return rc;
 }

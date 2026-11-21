@@ -1323,7 +1323,8 @@ void Agent::harvest_security_flags(const std::string& dev_id,
         // held but the worker only takes mu_ after fetch_and_store returns.
         if (!obn::signing::slicer_signing_key_present() ||
             !obn::signing::slicer_app_cert_usable() ||
-            !obn::appcert::material_consistent())
+            !obn::appcert::material_consistent() ||
+            obn::signing::slicer_crl_expired())
             ensure_app_cert_material_();
     }
 }
@@ -1685,7 +1686,8 @@ int Agent::send_message_to_printer(const std::string& dev_id,
     if (!sign && obn::signing::needs_signing_key(json_str) &&
         (!obn::signing::slicer_signing_key_present() ||
          !obn::signing::slicer_app_cert_usable() ||
-         !obn::appcert::material_consistent())) {
+         !obn::appcert::material_consistent() ||
+         obn::signing::slicer_crl_expired())) {
         // Signable command but the app-cert material is missing, unusable, or
         // cert/key-mismatched: kick the shared-credential fetch (issue #2 —
         // a secured printer rejects unsigned publishes with 84033543) and
@@ -2900,7 +2902,16 @@ void Agent::install_device_cert(const std::string& dev_id, bool lan_only)
         }
     }
 
-    if (obn::signing::slicer_app_cert_usable()) {
+    const bool usable = obn::signing::slicer_app_cert_usable();
+    // A stale CRL still passes slicer_app_cert_usable() (firmware has accepted
+    // past-nextUpdate CRLs) but app_cert_install with one fails on printers
+    // that do check it, and without this the ~1 Hz tick reinstalls the same
+    // stale chain forever while no credential fetch ever runs (issue #23).
+    // Refresh the shared material; the install below still runs, so printers
+    // that ignore nextUpdate keep working exactly as before.
+    if (usable && obn::signing::slicer_crl_expired())
+        ensure_app_cert_material_();
+    if (usable) {
         maybe_install_app_cert(dev_id);
         // If we already have a device cert on disk / in cache from a prior
         // SUCCESS reply, mark certified so Studio's ~1 Hz tick is cheap.
@@ -3701,7 +3712,8 @@ int Agent::cloud_send_message(const std::string& dev_id,
     if (!sign && obn::signing::needs_signing_key(json_str) &&
         (!obn::signing::slicer_signing_key_present() ||
          !obn::signing::slicer_app_cert_usable() ||
-         !obn::appcert::material_consistent())) {
+         !obn::appcert::material_consistent() ||
+         obn::signing::slicer_crl_expired())) {
         // Signable command but the app-cert material is missing, unusable, or
         // cert/key-mismatched: kick the shared-credential fetch (issue #2 —
         // a secured printer rejects unsigned publishes with 84033543) and

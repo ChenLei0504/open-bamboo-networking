@@ -753,4 +753,19 @@ bool slicer_app_cert_usable()
     return true;
 }
 
+bool slicer_crl_expired()
+{
+    const std::string crl_pem = slicer_crl_pem();
+    if (crl_pem.empty()) return false;
+    BIO* bio = ::BIO_new_mem_buf(crl_pem.data(), static_cast<int>(crl_pem.size()));
+    if (!bio) return false;
+    X509_CRL* crl = ::PEM_read_bio_X509_CRL(bio, nullptr, nullptr, nullptr);
+    ::BIO_free(bio);
+    if (!crl) return false;
+    const ASN1_TIME* next_update = ::X509_CRL_get0_nextUpdate(crl);
+    const bool expired = next_update && ::X509_cmp_current_time(next_update) < 0;
+    ::X509_CRL_free(crl);
+    return expired;
+}
+
 } // namespace obn::signing
