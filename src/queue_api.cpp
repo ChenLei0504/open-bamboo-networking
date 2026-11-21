@@ -566,6 +566,16 @@ json::Value build_printer_locked(const std::string& dev_id,
     temp["bed_c"]    = bed.is_number() ? json::Value(bed.as_number()) : json::Value(nullptr);
     p["temperature"] = json::Value(std::move(temp));
 
+    // Push status carries the diameter as a string ("0.4"); expose it as a
+    // number and stay null until a frame reports it (issue #16 stage 3
+    // contract request).
+    json::Value nozzle_d(nullptr);
+    const std::string nd = print_v.find("nozzle_diameter").as_string();
+    if (!nd.empty()) {
+        try { nozzle_d = json::Value(std::stod(nd)); } catch (...) {}
+    }
+    p["nozzle_diameter"] = std::move(nozzle_d);
+
     return json::Value(std::move(p));
 }
 

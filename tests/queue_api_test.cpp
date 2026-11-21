@@ -320,6 +320,7 @@ static void test_devices_watch_snapshot()
     CHECK(p.find("job.state").as_string() == "completed");
     CHECK(p.find("job.progress_percent").as_number() == 100);
     CHECK(p.find("temperature.nozzle_c").as_number() == 220.2);
+    CHECK(p.find("nozzle_diameter").as_number() == 0.4);
     CHECK(p.find("status_age_ms").is_number());
 
     // snapshot.get for a device outside the watch set.
